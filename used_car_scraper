@@ -1,0 +1,157 @@
+used_car_scraper.py
+
+from bs4 import BeautifulSoup
+import pandas as pd
+import requests
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+import regex as re
+import seaborn as sns
+import datetime as dt
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import time
+import pyautogui
+import datetime as dt
+import tabula
+from selenium.webdriver.support.ui import Select
+from IPython.display import HTML
+
+# Model menu
+brand_dic = {'mini':'迷你','all':'-車廠'}
+your_choice = 'all'
+model = 'convertable'
+
+# PART I: Scraping
+
+def scrape(ID):
+    content = []
+    driver.find_element_by_id(ID).click()
+    time.sleep(2)
+    sub_soup = BeautifulSoup(driver.page_source,'html.parser')
+    for i in sub_soup.find_all('td',class_='formt')[:10]:
+        content.append(i.get_text())
+    links=driver.find_elements_by_tag_name('img')
+    content.append(links[25].get_attribute('src'))
+    content.append(driver.current_url)
+    table.append(content)
+
+brand = brand_dic[your_choice]
+URL = 'https://28car.com/sell_lst.php'
+driver = webdriver.Chrome('./chromedriver')
+driver.get(URL)
+driver.find_element_by_id('h_srh').send_keys(model)
+driver.find_element_by_xpath("//input[@type='submit'][@class='btn_c'][@value='  搜尋  ']").click()
+driver.find_element_by_id('h_f_mk').click()
+time.sleep(2)
+Select(driver.find_element_by_id('h_f_mk')).select_by_visible_text(brand)
+time.sleep(2)
+Select(driver.find_element_by_id('h_f_do')).select_by_visible_text('未售')
+time.sleep(2)
+
+soup = BeautifulSoup(driver.page_source,'html.parser')
+page = []
+for i in soup.find_all(id='h_page'):
+    for j in i.find_all('option'):
+        page.append((j.get_text()))
+page = int(max(page))
+
+n = len(soup.find_all('td', id=re.compile("rw_")))
+ID = ['rw_'+str(x) for x in range(n)]
+
+table=[]
+for i in ID:
+    scrape(i)
+    time.sleep(1)
+    driver.back()
+    time.sleep(2)
+
+for p in range(page-1):
+    driver.find_element_by_id('btn_nxt').click()
+    time.sleep(2)
+    soup = BeautifulSoup(driver.page_source,'html.parser')
+    for i in ID:
+        try:
+            scrape(i)
+            time.sleep(1)
+            driver.back()
+            time.sleep(2)
+        except:
+            print ('Finished scrapping')
+            break
+
+# PART II: Information Visualization & Storage
+
+df = pd.DataFrame(columns=range(12),index=[0])
+for t in table:
+    df = df.append(pd.DataFrame(t).T)
+df = df.drop(columns=[1,2,6,8])
+df.columns=['ID','model','seats','size','year','price','image','URL']
+df = df.dropna()
+df.seats=df.seats.apply(lambda x: x[0])
+df.price=df.price.apply(lambda x: x.strip())
+df.price = df.price.apply(lambda x: re.search(r"D(.*)\[",x).group(1) if '[' in x else x[3:])
+df['year'] = df['year'].astype(int)
+df = df.sort_values('year',ascending=False)
+#df = df.loc[df['year']>=2016]
+
+## Converting links to html tags
+def path_to_image_html(path):
+    return '<img src="'+ path + '" width="160" >'
+## Rendering the dataframe as HTML table
+df.to_html(escape=False, formatters=dict(image=path_to_image_html))
+## Rendering the images in the dataframe using the HTML method.
+HTML(df.to_html(escape=False,formatters=dict(image=path_to_image_html)))
+## Saving the dataframe as a webpage
+df.to_html('output/car_sale.html',escape=False, formatters=dict(image=path_to_image_html))
+df.to_csv('output/car_sale.csv')
+
+
+
+# PART III: Email Notification
+import os 
+import smtplib
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from email import encoders
+
+##Set up crap for the attachments
+files = "output"
+filenames = [os.path.join(files, f) for f in os.listdir(files)]
+
+gmail_user = "your_email_address"
+gmail_pwd = "your_password"
+recipients = ['recipients email addresses']
+subject = "Check out the latest " + your_choice + ' ' + model
+text = 'Please find attached ' +str(df.shape[0]) + ' results of the current car sales of ' + your_choice + ' ' + model + '\nThis is an automated email, please do not reply.'
+
+##Create Module
+msg = MIMEMultipart()
+msg['From'] = gmail_user
+msg['To'] = ", ".join(recipients)
+msg['Subject'] = subject
+msg.attach(MIMEText(text))
+
+##get all the attachments
+for file in filenames:
+    part = MIMEBase('application', 'octet-stream')
+    part.set_payload(open(file, 'rb').read())
+    encoders.encode_base64(part)
+    part.add_header('Content-Disposition', 'attachment; filename="%s"' % file)
+    msg.attach(part)
+
+mailServer = smtplib.SMTP("smtp.gmail.com", 587)
+mailServer.ehlo()
+mailServer.starttls()
+mailServer.ehlo()
+mailServer.login(gmail_user, gmail_pwd)
+mailServer.sendmail(gmail_user, recipients, msg.as_string())
+mailServer.close()
+
+##send it
+#mail(recipients,subject,text,filenames)
+
+
